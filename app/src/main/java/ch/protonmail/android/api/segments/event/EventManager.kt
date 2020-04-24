@@ -18,6 +18,8 @@
  */
 package ch.protonmail.android.api.segments.event
 
+import android.app.NotificationManager
+import android.content.Context
 import android.content.SharedPreferences
 import android.text.TextUtils
 import android.util.Log
@@ -26,11 +28,14 @@ import ch.protonmail.android.api.exceptions.ApiException
 import ch.protonmail.android.api.interceptors.RetrofitTag
 import ch.protonmail.android.api.models.DatabaseProvider
 import ch.protonmail.android.api.models.EventResponse
+import ch.protonmail.android.api.models.User
+import ch.protonmail.android.api.models.room.messages.Message
+import ch.protonmail.android.api.models.room.notifications.Notification
 import ch.protonmail.android.api.utils.ParseUtils
 import ch.protonmail.android.core.Constants
 import ch.protonmail.android.core.ProtonMailApplication
 import ch.protonmail.android.core.UserManager
-import ch.protonmail.android.utils.Logger
+import ch.protonmail.android.servers.notification.NotificationServer
 import ch.protonmail.android.utils.extensions.ifNull
 import ch.protonmail.android.utils.extensions.ifNullElse
 import com.birbit.android.jobqueue.JobManager
@@ -55,13 +60,17 @@ class EventManager {
     lateinit var databaseProvider: DatabaseProvider
 
     private val service : EventService
+    private val notificationServer : NotificationServer
     private var sharedPrefs = mutableMapOf<String, SharedPreferences>()
     private var lastEventIds = mutableMapOf<String, String?>()
     private var eventHandlers = mutableMapOf<String, EventHandler>()
 
     init {
-        ProtonMailApplication.getApplication().appComponent.inject(this)
+        val app = ProtonMailApplication.getApplication()
+        app.appComponent.inject(this)
         service = mApi.securedServices.event
+        val notificationManager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationServer = NotificationServer(app, notificationManager)
     }
 
     private fun getLastEventId(username: String) : String? {
@@ -113,7 +122,7 @@ class EventManager {
     fun pull(loggedInUsers: List<String>) {
         loggedInUsers.forEach {username ->
             if (!eventHandlers.containsKey(username)) { /* TODO make EventManager aware of different users, we already parametrised "username" */
-                eventHandlers[username] = EventHandler(mApi, databaseProvider, mUserManager, mJobManager, username)
+                eventHandlers[username] = EventHandler(mApi, databaseProvider, mUserManager, mJobManager, username, notificationServer)
             }
         }
 

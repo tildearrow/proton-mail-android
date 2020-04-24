@@ -18,6 +18,8 @@
  */
 package ch.protonmail.android.api.segments.event
 
+import android.app.NotificationManager
+import android.content.Context
 import ch.protonmail.android.activities.messageDetails.repository.MessageDetailsRepository
 import ch.protonmail.android.api.interceptors.RetrofitTag
 import ch.protonmail.android.api.models.*
@@ -28,6 +30,7 @@ import ch.protonmail.android.api.models.enumerations.MessageFlag
 import ch.protonmail.android.api.models.messages.receive.*
 import ch.protonmail.android.api.models.room.contacts.*
 import ch.protonmail.android.api.models.room.messages.*
+import ch.protonmail.android.api.models.room.notifications.Notification
 import ch.protonmail.android.api.models.room.pendingActions.PendingActionsDao
 import ch.protonmail.android.api.models.room.pendingActions.PendingActionsDatabase
 import ch.protonmail.android.api.segments.message.MessageApiSpec
@@ -42,15 +45,15 @@ import ch.protonmail.android.events.user.UserSettingsEvent
 import ch.protonmail.android.jobs.FetchContactsDataJob
 import ch.protonmail.android.jobs.FetchContactsEmailsJob
 import ch.protonmail.android.jobs.OnFirstLoginJob
+import ch.protonmail.android.servers.notification.INotificationServer
+import ch.protonmail.android.servers.notification.NotificationServer
 import ch.protonmail.android.utils.AppUtil
 import ch.protonmail.android.utils.Logger
 import ch.protonmail.android.utils.MessageUtils
 import ch.protonmail.android.utils.extensions.ifNullElse
 import ch.protonmail.android.utils.extensions.removeFirst
 import ch.protonmail.android.utils.extensions.replaceFirst
-
 import com.birbit.android.jobqueue.JobManager
-import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import java.util.*
 import javax.inject.Inject
@@ -81,7 +84,8 @@ class EventHandler(
         private val databaseProvider: DatabaseProvider,
         private val userManager: UserManager,
         private val jobManager: JobManager,
-        val username: String
+        val username: String,
+        private val notificationServer: NotificationServer
 ) {
 
     private val messageFactory: MessageFactory
@@ -169,6 +173,21 @@ class EventHandler(
                 }
             }
         }
+
+        //val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    }
+
+
+
+    private fun showNotification(user: User, message: Message) {
+        val title = message.subject ?: "New message"
+        val body = "You have received a new message"
+        val messageId = message.messageId ?: return
+        notificationServer.notifySingleNewEmail(
+                userManager, user, message, messageId,
+                body,
+                title, true
+        )
     }
 
     private fun eventMessageSortSelector(message: EventResponse.MessageEventBody): Int = message.type
@@ -203,7 +222,7 @@ class EventHandler(
         }
         if (messages != null) {
             messages.sortByDescending { eventMessageSortSelector(it) }
-            writeMessagesUpdates(messagesDao, pendingActionsDao, messages)
+            writeMessagesUpdates(messagesDao, pendingActionsDao, messages, savedUser)
         }
         if (contacts != null) {
             writeContactsUpdates(contactsDao, contacts)
@@ -270,20 +289,20 @@ class EventHandler(
     }
 
     private fun writeMessagesUpdates(messagesDatabase: MessagesDatabase, pendingActionsDatabase: PendingActionsDatabase,
-                                     events: List<EventResponse.MessageEventBody>) {
+                                     events: List<EventResponse.MessageEventBody>, user: User) {
         var latestTimestamp = userManager.checkTimestamp
         for (event in events) {
             event.message?.let {
                 latestTimestamp = max(event.message.Time.toFloat(), latestTimestamp)
             }
             val messageID = event.messageID
-            writeMessageUpdate(event, pendingActionsDatabase, messageID, messagesDatabase)
+            writeMessageUpdate(event, pendingActionsDatabase, messageID, messagesDatabase, user)
         }
         userManager.checkTimestamp = latestTimestamp
     }
 
     private fun writeMessageUpdate(event: EventResponse.MessageEventBody, pendingActionsDatabase: PendingActionsDatabase,
-                                   messageID: String, messagesDatabase: MessagesDatabase) {
+                                   messageID: String, messagesDatabase: MessagesDatabase, user: User) {
         val type = EventType.fromInt(event.type)
         // TODO: check if this is the correct logic
         if (type != EventType.DELETE && checkPendingForSending(pendingActionsDatabase, messageID)) {
@@ -295,8 +314,9 @@ class EventHandler(
                     val savedMessage = messageDetailsRepository.findMessageById(messageID)
                     savedMessage.ifNullElse({
                         messageDetailsRepository.saveMessageInDB(messageFactory.createMessage(event.message))
+                        updateMessageFlags(messagesDatabase, messageID, event, user)
                     }, {
-                        updateMessageFlags(messagesDatabase, messageID, event)
+                        updateMessageFlags(messagesDatabase, messageID, event, user)
                     })
                 } catch (e: JsonSyntaxException) {
                     Logger.doLogException(TAG_EVENT_HANDLER, "unable to create Message object", e)
@@ -328,17 +348,17 @@ class EventHandler(
 
                 }
 
-                updateMessageFlags(messagesDatabase, messageID, event)
+                updateMessageFlags(messagesDatabase, messageID, event, user)
             }
 
             EventType.UPDATE_FLAGS -> {
-                updateMessageFlags(messagesDatabase, messageID, event)
+                updateMessageFlags(messagesDatabase, messageID, event, user)
             }
         }
         return
     }
 
-    private fun updateMessageFlags(messagesDatabase: MessagesDatabase, messageID: String, item: EventResponse.MessageEventBody) {
+    private fun updateMessageFlags(messagesDatabase: MessagesDatabase, messageID: String, item: EventResponse.MessageEventBody, user: User) {
         val message = messageDetailsRepository.findMessageById(messageID)
         val newMessage = item.message
 
@@ -415,10 +435,14 @@ class EventHandler(
                 messageDetailsRepository.deleteMessage(message)
             } else {
                 messageDetailsRepository.saveMessageInDB(message)
+                if (message != null && message.Unread){
+                    showNotification(user, message)
+                }
             }
         } else {
             stagedMessages[messageID]?.let {
                 messageDetailsRepository.saveMessageInDB(it)
+                showNotification(user, it)
             }
         }
     }
