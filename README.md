@@ -1,7 +1,15 @@
 
-# ProtonMail for Android
+# ProtonMail for Google Play Services-less Android
 
 Copyright (c) 2020 Proton Technologies AG
+
+## About
+
+this is a fork of a fork of the ProtonMail Android app.
+
+the original fork adds functionality to display notifications without Google Play Services. yep, I am aware it is just a proof of concept, but it works like a charm.
+
+this fork sets the background sync time to 4 minutes. this may lead to increased battery usage, but I have not noticed any major impact on my phone at least.
 
 ## License
 
