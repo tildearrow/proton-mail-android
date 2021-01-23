@@ -60,7 +60,7 @@ public class AlarmReceiver extends WakefulBroadcastReceiver {
         if (AppUtil.isAppInBackground()) {
             // TODO: Test the battery with a 1min refresh, if very bad then switch back to 30min
             // 4 minutes should be good.
-            secondsUntilNextCheck = 240; // if app in background sync on 30 min
+            secondsUntilNextCheck = 240; // if app in background sync on 4 min
         }
         if (immediate) {
             secondsUntilNextCheck = 1;
